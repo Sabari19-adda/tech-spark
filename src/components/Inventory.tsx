@@ -15,12 +15,13 @@ import {
   Download,
   BarChart3,
   Calendar,
-  DollarSign
+  DollarSign,
+  AlertCircle
 } from 'lucide-react';
 import { format } from 'date-fns';
 
 export const Inventory: React.FC = () => {
-  const { products, addProduct, approveProduct, rejectProduct, transferStock, generateBarcode } = useInventory();
+  const { products, addProduct, approveProduct, rejectProduct, transferStock, generateBarcode, uploadCSV, loading } = useInventory();
   const { user } = useAuth();
   const fileInputRef = useRef<HTMLInputElement>(null);
   
@@ -30,6 +31,8 @@ export const Inventory: React.FC = () => {
   const [filterCategory, setFilterCategory] = useState('all');
   const [showTransferModal, setShowTransferModal] = useState<string | null>(null);
   const [transferAmount, setTransferAmount] = useState('');
+  const [uploading, setUploading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   // New product form state
   const [newProduct, setNewProduct] = useState({
@@ -55,80 +58,95 @@ export const Inventory: React.FC = () => {
 
   const categories = [...new Set(products.map(p => p.category))];
 
-  const handleAddProduct = (e: React.FormEvent) => {
+  const handleAddProduct = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!user) return;
-
-    addProduct({
-      ...newProduct,
-      cost: parseFloat(newProduct.cost),
-      minThreshold: parseInt(newProduct.minThreshold),
-      status: 'pending',
-      createdBy: user.id,
-      damageStatus: 'none'
-    });
-
-    setNewProduct({
-      vendorCode: '',
-      category: '',
-      description: '',
-      cost: '',
-      currency: 'USD',
-      expiryDate: '',
-      minThreshold: '',
-      supplierInvoice: ''
-    });
-    setShowAddForm(false);
-  };
-
-  const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (!file) return;
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-      const csv = e.target?.result as string;
-      const lines = csv.split('\n');
-      
-      // Parse header
-      const headerLine = lines[0];
-      const [rowCount, totalAmount, timestamp, hashCode] = headerLine.split(',');
-      
-      // Parse products
-      for (let i = 1; i < lines.length && i <= parseInt(rowCount); i++) {
-        const line = lines[i].trim();
-        if (!line) continue;
-        
-        const [id, vendorCode, category, description, count, cost, currency, expiryDate] = line.split(',');
-        
-        addProduct({
-          vendorCode: vendorCode.trim(),
-          category: category.trim(),
-          description: description.trim(),
-          cost: parseFloat(cost),
-          currency: currency.trim(),
-          expiryDate: expiryDate.trim(),
-          status: 'pending',
-          createdBy: user?.id || '',
-          minThreshold: 10,
-          damageStatus: 'none',
-          supplierInvoice: `INV-${Date.now()}`
-        });
-      }
-    };
-    reader.readAsText(file);
+    setError(null);
     
-    // Reset file input
-    if (fileInputRef.current) {
-      fileInputRef.current.value = '';
+    try {
+      await addProduct({
+        ...newProduct,
+        cost: parseFloat(newProduct.cost),
+        minThreshold: parseInt(newProduct.minThreshold),
+        status: 'pending',
+        createdBy: user?.id || '',
+        damageStatus: 'none',
+        warehouseStock: 0,
+        shelfStock: 0
+      });
+
+      setNewProduct({
+        vendorCode: '',
+        category: '',
+        description: '',
+        cost: '',
+        currency: 'USD',
+        expiryDate: '',
+        minThreshold: '',
+        supplierInvoice: ''
+      });
+      setShowAddForm(false);
+    } catch (error: any) {
+      setError(error.message || 'Failed to add product');
     }
   };
 
-  const handleTransferStock = () => {
+  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+
+    setUploading(true);
+    setError(null);
+
+    try {
+      await uploadCSV(file);
+    } catch (error: any) {
+      setError(error.message || 'Failed to upload CSV file');
+    } finally {
+      setUploading(false);
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    }
+  };
+
+  const handleTransferStock = async () => {
     if (showTransferModal && transferAmount) {
-      transferStock(showTransferModal, parseInt(transferAmount));
-      setShowTransferModal(null);
-      setTransferAmount('');
+      setError(null);
+      try {
+        await transferStock(showTransferModal, parseInt(transferAmount));
+        setShowTransferModal(null);
+        setTransferAmount('');
+      } catch (error: any) {
+        setError(error.message || 'Failed to transfer stock');
+      }
+    }
+  };
+
+  const handleApprove = async (productId: string) => {
+    setError(null);
+    try {
+      await approveProduct(productId, user?.id || '');
+    } catch (error: any) {
+      setError(error.message || 'Failed to approve product');
+    }
+  };
+
+  const handleReject = async (productId: string) => {
+    setError(null);
+    try {
+      await rejectProduct(productId, user?.id || '');
+    } catch (error: any) {
+      setError(error.message || 'Failed to reject product');
+    }
+  };
+
+  const handleGenerateBarcode = async (productId: string) => {
+    setError(null);
+    try {
+      await generateBarcode(productId);
+    } catch (error: any) {
+      setError(error.message || 'Failed to generate barcode');
     }
   };
 
@@ -149,10 +167,11 @@ export const Inventory: React.FC = () => {
             <>
               <button
                 onClick={() => fileInputRef.current?.click()}
-                className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+                disabled={uploading}
+                className="flex items-center space-x-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors disabled:opacity-50"
               >
                 <Upload className="h-4 w-4" />
-                <span>Upload CSV</span>
+                <span>{uploading ? 'Uploading...' : 'Upload CSV'}</span>
               </button>
               <input
                 ref={fileInputRef}
@@ -173,6 +192,20 @@ export const Inventory: React.FC = () => {
           )}
         </div>
       </div>
+
+      {/* Error Message */}
+      {error && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center space-x-2 text-red-800">
+          <AlertCircle className="h-5 w-5" />
+          <span>{error}</span>
+          <button
+            onClick={() => setError(null)}
+            className="ml-auto text-red-600 hover:text-red-800"
+          >
+            <XCircle className="h-4 w-4" />
+          </button>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="bg-white rounded-xl p-6 shadow-sm border border-gray-100">
@@ -217,111 +250,129 @@ export const Inventory: React.FC = () => {
         </div>
       </div>
 
+      {/* Loading State */}
+      {loading && (
+        <div className="text-center py-8">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-emerald-600 mx-auto"></div>
+          <p className="mt-4 text-gray-600">Loading products...</p>
+        </div>
+      )}
+
       {/* Products Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
-        {filteredProducts.map((product) => (
-          <div key={product.id} className="bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
-            <div className="p-6">
-              {/* Status Badge */}
-              <div className="flex items-center justify-between mb-4">
-                <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                  product.status === 'approved' ? 'bg-green-100 text-green-800' :
-                  product.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
-                  'bg-red-100 text-red-800'
-                }`}>
-                  {product.status.charAt(0).toUpperCase() + product.status.slice(1)}
-                </span>
-                
-                {product.barcode && (
-                  <div className="text-xs text-gray-500">
-                    <BarChart3 className="h-4 w-4 inline mr-1" />
-                    {product.barcode}
+      {!loading && (
+        <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6">
+          {filteredProducts.map((product) => (
+            <div key={product.id} className="bg-white rounded-xl shadow-sm border border-gray-100 hover:shadow-md transition-shadow">
+              <div className="p-6">
+                {/* Status Badge */}
+                <div className="flex items-center justify-between mb-4">
+                  <span className={`px-3 py-1 rounded-full text-xs font-medium ${
+                    product.status === 'approved' ? 'bg-green-100 text-green-800' :
+                    product.status === 'pending' ? 'bg-yellow-100 text-yellow-800' :
+                    'bg-red-100 text-red-800'
+                  }`}>
+                    {product.status.charAt(0).toUpperCase() + product.status.slice(1)}
+                  </span>
+                  
+                  {product.barcode && (
+                    <div className="text-xs text-gray-500">
+                      <BarChart3 className="h-4 w-4 inline mr-1" />
+                      {product.barcode}
+                    </div>
+                  )}
+                </div>
+
+                {/* Product Info */}
+                <div className="mb-4">
+                  <h3 className="text-lg font-semibold text-gray-900 mb-1">{product.description}</h3>
+                  <p className="text-sm text-gray-600">Vendor: {product.vendorCode}</p>
+                  <p className="text-sm text-gray-600">Category: {product.category}</p>
+                </div>
+
+                {/* Stock Info */}
+                <div className="grid grid-cols-2 gap-4 mb-4">
+                  <div className="text-center p-3 bg-blue-50 rounded-lg">
+                    <Package className="h-5 w-5 text-blue-600 mx-auto mb-1" />
+                    <p className="text-sm text-gray-600">Warehouse</p>
+                    <p className="text-lg font-semibold text-blue-600">{product.warehouseStock}</p>
                   </div>
-                )}
-              </div>
-
-              {/* Product Info */}
-              <div className="mb-4">
-                <h3 className="text-lg font-semibold text-gray-900 mb-1">{product.description}</h3>
-                <p className="text-sm text-gray-600">Vendor: {product.vendorCode}</p>
-                <p className="text-sm text-gray-600">Category: {product.category}</p>
-              </div>
-
-              {/* Stock Info */}
-              <div className="grid grid-cols-2 gap-4 mb-4">
-                <div className="text-center p-3 bg-blue-50 rounded-lg">
-                  <Package className="h-5 w-5 text-blue-600 mx-auto mb-1" />
-                  <p className="text-sm text-gray-600">Warehouse</p>
-                  <p className="text-lg font-semibold text-blue-600">{product.warehouseStock}</p>
+                  <div className="text-center p-3 bg-green-50 rounded-lg">
+                    <ShoppingCart className="h-5 w-5 text-green-600 mx-auto mb-1" />
+                    <p className="text-sm text-gray-600">Shelf</p>
+                    <p className="text-lg font-semibold text-green-600">{product.shelfStock}</p>
+                  </div>
                 </div>
-                <div className="text-center p-3 bg-green-50 rounded-lg">
-                  <ShoppingCart className="h-5 w-5 text-green-600 mx-auto mb-1" />
-                  <p className="text-sm text-gray-600">Shelf</p>
-                  <p className="text-lg font-semibold text-green-600">{product.shelfStock}</p>
-                </div>
-              </div>
 
-              {/* Price and Expiry */}
-              <div className="flex items-center justify-between mb-4 text-sm text-gray-600">
-                <div className="flex items-center space-x-1">
-                  <DollarSign className="h-4 w-4" />
-                  <span>{product.cost} {product.currency}</span>
+                {/* Price and Expiry */}
+                <div className="flex items-center justify-between mb-4 text-sm text-gray-600">
+                  <div className="flex items-center space-x-1">
+                    <DollarSign className="h-4 w-4" />
+                    <span>{product.cost} {product.currency}</span>
+                  </div>
+                  <div className="flex items-center space-x-1">
+                    <Calendar className="h-4 w-4" />
+                    <span>{format(new Date(product.expiryDate), 'MMM dd, yyyy')}</span>
+                  </div>
                 </div>
-                <div className="flex items-center space-x-1">
-                  <Calendar className="h-4 w-4" />
-                  <span>{format(new Date(product.expiryDate), 'MMM dd, yyyy')}</span>
-                </div>
-              </div>
 
-              {/* Actions */}
-              <div className="flex space-x-2">
-                {product.status === 'pending' && canApprove && (
-                  <>
-                    <button
-                      onClick={() => approveProduct(product.id, user?.id || '')}
-                      className="flex-1 flex items-center justify-center space-x-1 px-3 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors"
-                    >
-                      <CheckCircle className="h-4 w-4" />
-                      <span>Approve</span>
-                    </button>
-                    <button
-                      onClick={() => rejectProduct(product.id, user?.id || '')}
-                      className="flex-1 flex items-center justify-center space-x-1 px-3 py-2 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition-colors"
-                    >
-                      <XCircle className="h-4 w-4" />
-                      <span>Reject</span>
-                    </button>
-                  </>
-                )}
-                
-                {product.status === 'approved' && (
-                  <>
-                    {product.warehouseStock > 0 && (
+                {/* Actions */}
+                <div className="flex space-x-2">
+                  {product.status === 'pending' && canApprove && (
+                    <>
                       <button
-                        onClick={() => setShowTransferModal(product.id)}
-                        className="flex-1 flex items-center justify-center space-x-1 px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
+                        onClick={() => handleApprove(product.id)}
+                        className="flex-1 flex items-center justify-center space-x-1 px-3 py-2 bg-green-600 text-white text-sm rounded-lg hover:bg-green-700 transition-colors"
                       >
-                        <ArrowRight className="h-4 w-4" />
-                        <span>Transfer</span>
+                        <CheckCircle className="h-4 w-4" />
+                        <span>Approve</span>
                       </button>
-                    )}
-                    
-                    {!product.barcode && (
                       <button
-                        onClick={() => generateBarcode(product.id)}
-                        className="flex-1 flex items-center justify-center space-x-1 px-3 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition-colors"
+                        onClick={() => handleReject(product.id)}
+                        className="flex-1 flex items-center justify-center space-x-1 px-3 py-2 bg-red-600 text-white text-sm rounded-lg hover:bg-red-700 transition-colors"
                       >
-                        <BarChart3 className="h-4 w-4" />
-                        <span>Barcode</span>
+                        <XCircle className="h-4 w-4" />
+                        <span>Reject</span>
                       </button>
-                    )}
-                  </>
-                )}
+                    </>
+                  )}
+                  
+                  {product.status === 'approved' && (
+                    <>
+                      {product.warehouseStock > 0 && (
+                        <button
+                          onClick={() => setShowTransferModal(product.id)}
+                          className="flex-1 flex items-center justify-center space-x-1 px-3 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-700 transition-colors"
+                        >
+                          <ArrowRight className="h-4 w-4" />
+                          <span>Transfer</span>
+                        </button>
+                      )}
+                      
+                      {!product.barcode && (
+                        <button
+                          onClick={() => handleGenerateBarcode(product.id)}
+                          className="flex-1 flex items-center justify-center space-x-1 px-3 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition-colors"
+                        >
+                          <BarChart3 className="h-4 w-4" />
+                          <span>Barcode</span>
+                        </button>
+                      )}
+                    </>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
-      </div>
+          ))}
+        </div>
+      )}
+
+      {/* Empty State */}
+      {!loading && filteredProducts.length === 0 && (
+        <div className="text-center py-12">
+          <Package className="h-12 w-12 text-gray-300 mx-auto mb-4" />
+          <p className="text-gray-500">No products found matching your criteria</p>
+        </div>
+      )}
 
       {/* Add Product Modal */}
       {showAddForm && (

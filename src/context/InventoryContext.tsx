@@ -1,20 +1,23 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { Product, Alert, Invoice } from '../types';
+import apiService from '../services/api';
 
 interface InventoryContextType {
   products: Product[];
   alerts: Alert[];
   invoices: Invoice[];
-  addProduct: (product: Omit<Product, 'id' | 'createdAt'>) => void;
-  updateProduct: (id: string, updates: Partial<Product>) => void;
-  approveProduct: (id: string, approverId: string) => void;
-  rejectProduct: (id: string, approverId: string) => void;
-  transferStock: (id: string, amount: number) => void;
-  generateBarcode: (id: string) => string;
-  addAlert: (alert: Omit<Alert, 'id' | 'createdAt'>) => void;
-  resolveAlert: (id: string) => void;
-  addInvoice: (invoice: Omit<Invoice, 'id' | 'createdAt'>) => void;
-  checkAlerts: () => void;
+  loading: boolean;
+  addProduct: (product: Omit<Product, 'id' | 'createdAt'>) => Promise<void>;
+  updateProduct: (id: string, updates: Partial<Product>) => Promise<void>;
+  approveProduct: (id: string, approverId: string) => Promise<void>;
+  rejectProduct: (id: string, approverId: string) => Promise<void>;
+  transferStock: (id: string, amount: number) => Promise<void>;
+  generateBarcode: (id: string) => Promise<string>;
+  addAlert: (alert: Omit<Alert, 'id' | 'createdAt'>) => Promise<void>;
+  resolveAlert: (id: string) => Promise<void>;
+  addInvoice: (invoice: Omit<Invoice, 'id' | 'createdAt'>) => Promise<void>;
+  refreshData: () => Promise<void>;
+  uploadCSV: (file: File) => Promise<void>;
 }
 
 const InventoryContext = createContext<InventoryContextType | undefined>(undefined);
@@ -31,184 +34,138 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
   const [products, setProducts] = useState<Product[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
+  const [loading, setLoading] = useState(false);
 
-  // Initialize with sample data
-  useEffect(() => {
-    const sampleProducts: Product[] = [
-      {
-        id: '1',
-        vendorCode: 'VND001',
-        category: 'Dairy',
-        description: 'Fresh Milk 1L',
-        warehouseStock: 150,
-        shelfStock: 45,
-        cost: 3.99,
-        currency: 'USD',
-        expiryDate: '2025-02-15',
-        createdAt: '2025-01-08',
-        status: 'approved',
-        createdBy: 'maker',
-        approvedBy: 'checker',
-        barcode: '1234567890123',
-        minThreshold: 20,
-        damageStatus: 'none'
-      },
-      {
-        id: '2',
-        vendorCode: 'VND002',
-        category: 'Produce',
-        description: 'Organic Bananas',
-        warehouseStock: 12,
-        shelfStock: 8,
-        cost: 2.49,
-        currency: 'USD',
-        expiryDate: '2025-01-12',
-        createdAt: '2025-01-08',
-        status: 'approved',
-        createdBy: 'maker',
-        approvedBy: 'checker',
-        barcode: '1234567890124',
-        minThreshold: 15,
-        damageStatus: 'none'
-      }
-    ];
-    setProducts(sampleProducts);
-    
-    // Generate initial alerts
-    const initialAlerts: Alert[] = [
-      {
-        id: '1',
-        type: 'low_stock',
-        productId: '2',
-        message: 'Organic Bananas stock is below threshold',
-        severity: 'high',
-        createdAt: '2025-01-08',
-        resolved: false
-      },
-      {
-        id: '2',
-        type: 'expiry_warning',
-        productId: '2',
-        message: 'Organic Bananas will expire in 4 days',
-        severity: 'medium',
-        createdAt: '2025-01-08',
-        resolved: false
-      }
-    ];
-    setAlerts(initialAlerts);
-  }, []);
+  const refreshData = async () => {
+    setLoading(true);
+    try {
+      const [productsResponse, alertsResponse, invoicesResponse] = await Promise.all([
+        apiService.getProducts(),
+        apiService.getAlerts(),
+        apiService.getInvoices().catch(() => ({ invoices: [] })) // Invoices might not be accessible to all roles
+      ]);
 
-  const addProduct = (product: Omit<Product, 'id' | 'createdAt'>) => {
-    const newProduct: Product = {
-      ...product,
-      id: Date.now().toString(),
-      createdAt: new Date().toISOString(),
-      warehouseStock: 0,
-      shelfStock: 0
-    };
-    setProducts(prev => [...prev, newProduct]);
-  };
-
-  const updateProduct = (id: string, updates: Partial<Product>) => {
-    setProducts(prev => prev.map(p => p.id === id ? { ...p, ...updates } : p));
-  };
-
-  const approveProduct = (id: string, approverId: string) => {
-    updateProduct(id, { status: 'approved', approvedBy: approverId });
-  };
-
-  const rejectProduct = (id: string, approverId: string) => {
-    updateProduct(id, { status: 'rejected', approvedBy: approverId });
-  };
-
-  const transferStock = (id: string, amount: number) => {
-    const product = products.find(p => p.id === id);
-    if (product && product.warehouseStock >= amount) {
-      updateProduct(id, {
-        warehouseStock: product.warehouseStock - amount,
-        shelfStock: product.shelfStock + amount
-      });
+      setProducts(productsResponse.products || []);
+      setAlerts(alertsResponse.alerts || []);
+      setInvoices(invoicesResponse.invoices || []);
+    } catch (error) {
+      console.error('Failed to refresh data:', error);
+    } finally {
+      setLoading(false);
     }
   };
 
-  const generateBarcode = (id: string): string => {
-    const barcode = `EMT${id.padStart(10, '0')}`;
-    updateProduct(id, { barcode });
-    return barcode;
-  };
-
-  const addAlert = (alert: Omit<Alert, 'id' | 'createdAt'>) => {
-    const newAlert: Alert = {
-      ...alert,
-      id: Date.now().toString(),
-      createdAt: new Date().toISOString()
-    };
-    setAlerts(prev => [...prev, newAlert]);
-  };
-
-  const resolveAlert = (id: string) => {
-    setAlerts(prev => prev.map(a => a.id === id ? { ...a, resolved: true } : a));
-  };
-
-  const addInvoice = (invoice: Omit<Invoice, 'id' | 'createdAt'>) => {
-    const newInvoice: Invoice = {
-      ...invoice,
-      id: Date.now().toString(),
-      createdAt: new Date().toISOString()
-    };
-    setInvoices(prev => [...prev, newInvoice]);
-  };
-
-  const checkAlerts = () => {
-    products.forEach(product => {
-      const totalStock = product.warehouseStock + product.shelfStock;
-      
-      // Check low stock
-      if (totalStock <= product.minThreshold) {
-        const existingAlert = alerts.find(a => a.productId === product.id && a.type === 'low_stock' && !a.resolved);
-        if (!existingAlert) {
-          addAlert({
-            type: 'low_stock',
-            productId: product.id,
-            message: `${product.description} stock is below threshold`,
-            severity: 'high',
-            resolved: false
-          });
-        }
-      }
-
-      // Check expiry warnings
-      const expiryDate = new Date(product.expiryDate);
-      const warningDate = new Date();
-      warningDate.setDate(warningDate.getDate() + 3);
-      
-      if (expiryDate <= warningDate) {
-        const daysUntilExpiry = Math.ceil((expiryDate.getTime() - new Date().getTime()) / (1000 * 60 * 60 * 24));
-        const existingAlert = alerts.find(a => a.productId === product.id && a.type === 'expiry_warning' && !a.resolved);
-        if (!existingAlert && daysUntilExpiry >= 0) {
-          addAlert({
-            type: 'expiry_warning',
-            productId: product.id,
-            message: `${product.description} will expire in ${daysUntilExpiry} day(s)`,
-            severity: daysUntilExpiry <= 1 ? 'high' : 'medium',
-            resolved: false
-          });
-        }
-      }
-    });
-  };
-
-  // Check alerts periodically
   useEffect(() => {
-    const interval = setInterval(checkAlerts, 60000); // Check every minute
-    return () => clearInterval(interval);
-  }, [products, alerts]);
+    refreshData();
+  }, []);
+
+  const addProduct = async (productData: Omit<Product, 'id' | 'createdAt'>) => {
+    try {
+      const response = await apiService.createProduct(productData);
+      await refreshData(); // Refresh to get updated data
+    } catch (error) {
+      console.error('Failed to add product:', error);
+      throw error;
+    }
+  };
+
+  const updateProduct = async (id: string, updates: Partial<Product>) => {
+    try {
+      await apiService.updateProduct(id, updates);
+      await refreshData();
+    } catch (error) {
+      console.error('Failed to update product:', error);
+      throw error;
+    }
+  };
+
+  const approveProduct = async (id: string, approverId: string) => {
+    try {
+      await apiService.approveProduct(id);
+      await refreshData();
+    } catch (error) {
+      console.error('Failed to approve product:', error);
+      throw error;
+    }
+  };
+
+  const rejectProduct = async (id: string, approverId: string) => {
+    try {
+      await apiService.rejectProduct(id);
+      await refreshData();
+    } catch (error) {
+      console.error('Failed to reject product:', error);
+      throw error;
+    }
+  };
+
+  const transferStock = async (id: string, amount: number) => {
+    try {
+      await apiService.transferStock(id, amount);
+      await refreshData();
+    } catch (error) {
+      console.error('Failed to transfer stock:', error);
+      throw error;
+    }
+  };
+
+  const generateBarcode = async (id: string): Promise<string> => {
+    try {
+      const response = await apiService.generateBarcode(id);
+      await refreshData();
+      return response.barcode;
+    } catch (error) {
+      console.error('Failed to generate barcode:', error);
+      throw error;
+    }
+  };
+
+  const addAlert = async (alertData: Omit<Alert, 'id' | 'createdAt'>) => {
+    try {
+      await apiService.createAlert(alertData);
+      await refreshData();
+    } catch (error) {
+      console.error('Failed to add alert:', error);
+      throw error;
+    }
+  };
+
+  const resolveAlert = async (id: string) => {
+    try {
+      await apiService.resolveAlert(id);
+      await refreshData();
+    } catch (error) {
+      console.error('Failed to resolve alert:', error);
+      throw error;
+    }
+  };
+
+  const addInvoice = async (invoiceData: Omit<Invoice, 'id' | 'createdAt'>) => {
+    try {
+      await apiService.createInvoice(invoiceData);
+      await refreshData();
+    } catch (error) {
+      console.error('Failed to add invoice:', error);
+      throw error;
+    }
+  };
+
+  const uploadCSV = async (file: File) => {
+    try {
+      await apiService.uploadCSV(file);
+      await refreshData();
+    } catch (error) {
+      console.error('Failed to upload CSV:', error);
+      throw error;
+    }
+  };
 
   return (
     <InventoryContext.Provider value={{
       products,
       alerts,
       invoices,
+      loading,
       addProduct,
       updateProduct,
       approveProduct,
@@ -218,7 +175,8 @@ export const InventoryProvider: React.FC<{ children: React.ReactNode }> = ({ chi
       addAlert,
       resolveAlert,
       addInvoice,
-      checkAlerts
+      refreshData,
+      uploadCSV
     }}>
       {children}
     </InventoryContext.Provider>
